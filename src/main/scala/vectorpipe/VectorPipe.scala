@@ -2,20 +2,70 @@ package vectorpipe
 
 import java.io.ByteArrayOutputStream
 import java.util.zip.GZIPOutputStream
+import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
 
 import vectorpipe.vectortile._
 import vectorpipe.vectortile.export._
 import geotrellis.proj4.{CRS, LatLng, WebMercator}
 import geotrellis.spark.SpatialKey
 import geotrellis.spark.tiling.{LayoutLevel, ZoomedLayoutScheme}
-import geotrellis.vector.Geometry
+import geotrellis.vector.{Extent, Feature, Geometry}
 import geotrellis.vectortile._
-import org.apache.spark.rdd.RDD
 import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.expressions.GenericRowWithSchema
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.StringType
 import org.locationtech.jts.{geom => jts}
+import org.locationtech.geomesa.spark.jts.SparkSessionWithJTS
+
+case class TiledFeature(sk: SpatialKey, layer: String, geom: jts.Geometry, data: Map[String, Array[Byte]]) {
+  def feature: VectorTileFeature[Geometry] = Feature(geom, data.mapValues {
+    b =>
+      val bb = ByteBuffer.wrap(b)
+      bb.get() match {
+        case 0 =>
+          val bytes = Array.ofDim[Byte](bb.remaining())
+          bb.get(bytes)
+          VString(new String(bytes, StandardCharsets.UTF_8))
+        case 1 => VFloat(bb.getFloat())
+        case 2 => VDouble(bb.getDouble())
+        case 3 => VInt64(bb.getLong())
+        case 4 => VWord64(bb.getLong())
+        case 5 => VSint64(bb.getLong())
+        case 6 => VBool(bb.get() == 1)
+      }
+  })
+}
+
+object TiledFeature {
+  def apply(sk: SpatialKey, layer: String, feature: VectorTileFeature[Geometry]): TiledFeature =
+    TiledFeature(sk, layer, feature.geom.jtsGeom, feature.data.mapValues {
+      case VString(v) => (0: Byte) +: v.getBytes(StandardCharsets.UTF_8)
+      case VFloat(v) =>
+        ByteBuffer.allocate(5).put(2: Byte).putFloat(v).array()
+      case VDouble(v) =>
+        ByteBuffer.allocate(9).put(2: Byte).putDouble(v).array()
+      case VInt64(v) =>
+        ByteBuffer.allocate(9).put(3: Byte).putLong(v).array()
+      case VWord64(v) =>
+        ByteBuffer.allocate(9).put(4: Byte).putLong(v).array()
+      case VSint64(v) =>
+        ByteBuffer.allocate(9).put(5: Byte).putLong(v).array()
+      case VBool(v) if v =>
+        Array(6, 1)
+      case VBool(_) =>
+        Array(6, 0)
+    })
+}
+
+case class Tile(sk: SpatialKey, bytes: Array[Byte], extent: Extent) {
+  def tile: VectorTile = VectorTile.fromBytes(bytes, extent)
+}
+
+object Tile {
+  def apply(sk: SpatialKey, tile: VectorTile): Tile = Tile(sk, tile.toBytes, tile.tileExtent)
+}
 
 case class BinaryTile(zoom: Int, x: Int, y: Int, data: Array[Byte])
 
@@ -85,7 +135,10 @@ object VectorPipe {
         SpatialKey(k.col / 2, k.row / 2) }.toSeq
     }
 
-    def generateVectorTiles[G <: Geometry](df: DataFrame, level: LayoutLevel): RDD[(SpatialKey, VectorTile)] = {
+    def generateVectorTiles(df: DataFrame, level: LayoutLevel): Dataset[Tile] = {
+      import df.sparkSession.implicits._
+      df.sparkSession.withJTS
+
       val zoom = level.zoom
       val clip = udf { (g: jts.Geometry, key: GenericRowWithSchema, layerName: String) =>
         val k = getSpatialKey(key)
@@ -94,43 +147,38 @@ object VectorPipe {
 
       val selectedGeometry = pipeline
         .select(df, zoom, keyColumn)
+        .withColumn(keyColumn, explode(col(keyColumn)))
+        .repartition(col(keyColumn)) // spread copies of possibly ill-tempered geometries around cluster prior to clipping
 
-      pipeline.layerMultiplicity match {
+      val clipped = pipeline.layerMultiplicity match {
         case SingleLayer(layerName) =>
-          val clipped = selectedGeometry
-            .withColumn(keyColumn, explode(col(keyColumn)))
-            .repartition(col(keyColumn)) // spread copies of possibly ill-tempered geometries around cluster prior to clipping
+          selectedGeometry
             .withColumn(geomColumn, clip(col(geomColumn), col(keyColumn), lit(layerName)))
-
-          clipped
-            .rdd
-            .map { r => (getSpatialKey(r, keyColumn), pipeline.pack(r, zoom)) }
-            .groupByKey
-            .map { case (key, feats) =>
-               val ex = level.layout.mapTransform.keyToExtent(key)
-               key -> buildVectorTile(feats, layerName, ex, options.tileResolution, options.orderAreas)
+            .map {
+              row =>
+                TiledFeature(getSpatialKey(row, keyColumn), layerName, pipeline.pack(row, zoom))
             }
         case LayerNamesInColumn(layerNameCol) =>
           assert(selectedGeometry.schema(layerNameCol).dataType == StringType,
-                 s"layerMultiplicity=${pipeline.layerMultiplicity} requires String-type column of name ${layerNameCol}")
-          val clipped = selectedGeometry
-            .withColumn(keyColumn, explode(col(keyColumn)))
-            .repartition(col(keyColumn)) // spread copies of possibly ill-tempered geometries around cluster prior to clipping
-            .withColumn(geomColumn, clip(col(geomColumn), col(keyColumn), col(layerNameCol)))
+            s"layerMultiplicity=${pipeline.layerMultiplicity} requires String-type column of name ${layerNameCol}")
 
-          clipped
-            .rdd
-            .map { r => (getSpatialKey(r, keyColumn), r.getAs[String](layerNameCol) -> pipeline.pack(r, zoom)) }
-            .groupByKey
-            .mapPartitions{ iter: Iterator[(SpatialKey, Iterable[(String, VectorTileFeature[Geometry])])] =>
-              iter.map{ case (key, groupedFeatures) => {
-                val layerFeatures: Map[String, Iterable[VectorTileFeature[Geometry]]] =
-                  groupedFeatures.groupBy(_._1).mapValues(_.map(_._2))
-                val ex = level.layout.mapTransform.keyToExtent(key)
-                key -> buildVectorTile(layerFeatures, ex, options.tileResolution, options.orderAreas)
-              }}
-          }
+          selectedGeometry
+            .withColumn(geomColumn, clip(col(geomColumn), col(keyColumn), col(layerNameCol)))
+            .map {
+              row =>
+                TiledFeature(getSpatialKey(row, keyColumn), row.getAs[String](layerNameCol), pipeline.pack(row, zoom))
+            }
       }
+
+      clipped
+        .groupByKey(r => r.sk)
+        .mapGroups {
+          case (sk, groupedFeatures) =>
+            val layerFeatures: Map[String, Iterable[VectorTileFeature[Geometry]]] =
+              groupedFeatures.toIterable.groupBy(_.layer).mapValues(_.map(_.feature))
+            val extent = level.layout.mapTransform.keyToExtent(sk)
+            Tile(sk, buildVectorTile(layerFeatures, extent, options.tileResolution, options.orderAreas))
+        }
     }
 
     // ITERATION:
@@ -172,7 +220,7 @@ object VectorPipe {
               val gzipStream = new GZIPOutputStream(byteStream)
 
               try {
-                gzipStream.write(tile._2.toBytes)
+                gzipStream.write(tile.tile.toBytes)
               } finally {
                 gzipStream.close()
               }
@@ -180,8 +228,8 @@ object VectorPipe {
               byteStream.close()
             }
 
-            BinaryTile(zoom, tile._1.col, tile._1.row, byteStream.toByteArray)
-          }.toDS())
+            BinaryTile(zoom, tile.sk.col, tile.sk.row, byteStream.toByteArray)
+          })
 
           (prepared.withColumn(keyColumn, reduceKeys(col(keyColumn))), unionedTiles)
     }
