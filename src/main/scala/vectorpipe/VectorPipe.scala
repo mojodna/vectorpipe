@@ -1,11 +1,13 @@
 package vectorpipe
 
+import java.io.ByteArrayOutputStream
+import java.util.zip.GZIPOutputStream
+
 import vectorpipe.vectortile._
 import vectorpipe.vectortile.export._
-
 import geotrellis.proj4.{CRS, LatLng, WebMercator}
 import geotrellis.spark.SpatialKey
-import geotrellis.spark.tiling.{ZoomedLayoutScheme, LayoutLevel}
+import geotrellis.spark.tiling.{LayoutLevel, ZoomedLayoutScheme}
 import geotrellis.vector.Geometry
 import geotrellis.vectortile._
 import org.apache.spark.rdd.RDD
@@ -14,6 +16,8 @@ import org.apache.spark.sql.catalyst.expressions.GenericRowWithSchema
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.StringType
 import org.locationtech.jts.{geom => jts}
+
+case class BinaryTile(zoom: Int, x: Int, y: Int, data: Array[Byte])
 
 object VectorPipe {
 
@@ -46,7 +50,10 @@ object VectorPipe {
     def forAllZoomsWithSrcProjection(zoom: Int, crs: CRS) = Options(zoom, Some(0), crs, None)
   }
 
-  def apply(input: DataFrame, pipeline: vectortile.Pipeline, options: Options): Unit = {
+  def apply(input: DataFrame, pipeline: vectortile.Pipeline, options: Options): Dataset[BinaryTile] = {
+    val spark = input.sparkSession
+    import spark.implicits._
+
     val geomColumn = pipeline.geometryColumn
     assert(input.columns.contains(geomColumn) &&
            input.schema(geomColumn).dataType.isInstanceOf[org.apache.spark.sql.jts.AbstractGeometryUDT[jts.Geometry]],
@@ -131,25 +138,51 @@ object VectorPipe {
     // 6.   Simplify
     // 7.   Re-key
 
-    Range.Int(maxZoom, minZoom, -1).inclusive.foldLeft(reprojected){ (df, zoom) =>
-      val level = zls.levelForZoom(zoom)
-      val working =
-        if (zoom == maxZoom) {
-          df.withColumn(keyColumn, keyTo(level.layout)(col(geomColumn)))
-        } else {
-          df
-        }
-      val simplify = udf { g: jts.Geometry => pipeline.simplify(g, level.layout) }
-      val reduced = pipeline
-        .reduce(working, level, keyColumn)
-        .localCheckpoint()
-      val prepared = reduced
-        .withColumn(geomColumn, simplify(col(geomColumn)))
-      val vts = generateVectorTiles(prepared, level)
-      saveVectorTiles(vts, zoom, pipeline.baseOutputURI)
-      prepared.withColumn(keyColumn, reduceKeys(col(keyColumn)))
+    val (_, renderedTiles) = Range
+      .Int(maxZoom, minZoom, -1)
+      .inclusive
+      .foldLeft((reprojected, spark.emptyDataset[BinaryTile])) {
+        case ((df, tiles), zoom) =>
+          val level = zls.levelForZoom(zoom)
+          val working =
+            if (zoom == maxZoom) {
+              df.withColumn(keyColumn, keyTo(level.layout)(col(geomColumn)))
+            } else {
+              df
+            }
+          val simplify = udf { g: jts.Geometry => pipeline.simplify(g, level.layout) }
+          val reduced = pipeline
+            .reduce(working, level, keyColumn)
+            .localCheckpoint()
+          val prepared = reduced
+            .withColumn(geomColumn, simplify(col(geomColumn)))
+          val vts = generateVectorTiles(prepared, level)
+
+          pipeline.baseOutputURI.foreach(saveVectorTiles(vts, zoom, _))
+
+          val unionedTiles = tiles.union(vts.map {
+            tile =>
+            val byteStream = new ByteArrayOutputStream()
+
+            try {
+              val gzipStream = new GZIPOutputStream(byteStream)
+
+              try {
+                gzipStream.write(tile._2.toBytes)
+              } finally {
+                gzipStream.close()
+              }
+            } finally {
+              byteStream.close()
+            }
+
+            BinaryTile(zoom, tile._1.col, tile._1.row, byteStream.toByteArray)
+          }.toDS())
+
+          (prepared.withColumn(keyColumn, reduceKeys(col(keyColumn))), unionedTiles)
     }
 
+    renderedTiles
   }
 
 }
