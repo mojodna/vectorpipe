@@ -223,29 +223,6 @@ package object osm {
 
   @transient lazy val compressMemberTypes: UserDefinedFunction = udf(_compressMemberTypes, ArrayType(MemberSchema))
 
-  /**
-   * Checks if members have byte-encoded types
-   */
-  def hasCompressedMemberTypes(input: DataFrame): Boolean = {
-    Try(input.schema("members")
-             .dataType
-             .asInstanceOf[ArrayType]
-             .elementType
-             .asInstanceOf[StructType]
-             .apply("type")) match {
-      case Failure(_) => false
-      case Success(field) => field.dataType == ByteType
-    }
-  }
-
-  def ensureCompressedMembers(input: DataFrame): DataFrame = {
-    if (hasCompressedMemberTypes(input))
-      input
-    else {
-      input.withColumn("members", compressMemberTypes(col("members")))
-    }
-  }
-
   case class StrMember(`type`: String, ref: Long, role: String)
 
   private val elaborateMembers = org.apache.spark.sql.functions.udf { member: Seq[Row] =>
