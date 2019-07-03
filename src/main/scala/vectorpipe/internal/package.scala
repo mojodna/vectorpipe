@@ -3,7 +3,7 @@ package vectorpipe
 import java.sql.Timestamp
 
 import geotrellis.vector._
-import org.apache.log4j.Logger
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql._
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
@@ -14,13 +14,11 @@ import vectorpipe.functions.asDouble
 import vectorpipe.functions.osm._
 import vectorpipe.relations.{MultiPolygons, Routes}
 
-package object internal {
+package object internal extends Logging {
   val NodeType: Byte = 1
   val WayType: Byte = 2
   val RelationType: Byte = 3
   val MultiPolygonRoles: Seq[String] = Set("", "outer", "inner").toSeq
-
-  @transient lazy val logger: Logger = Logger.getLogger(getClass)
 
   /**
     * Pre-process nodes.
@@ -231,7 +229,6 @@ package object internal {
     // Create a way entry for each changeset in which a node was modified, containing the timestamp of the node that
     // triggered the association. This will later be used to assemble ways at each of those points in time. If you need
     // authorship, join on changesets
-    // TODO check on partitioning of nodes (assume that the thing requesting the join gets to keep its partitioning)
     val waysByChangeset = nodes
       .select('changeset, 'id, 'timestamp as 'updated)
       .join(nodesToWays, Seq("id"))

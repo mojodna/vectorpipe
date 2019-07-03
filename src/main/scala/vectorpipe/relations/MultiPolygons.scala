@@ -3,11 +3,10 @@ import java.sql.Timestamp
 
 import org.locationtech.jts.geom.prep.PreparedGeometryFactory
 import org.locationtech.jts.geom.{Geometry, LineString, Polygon, TopologyException}
-import org.apache.log4j.Logger
+import org.apache.spark.internal.Logging
 import vectorpipe.internal.WayType
 
-object MultiPolygons {
-  @transient private lazy val logger = Logger.getLogger(getClass)
+object MultiPolygons extends Logging {
   val prepGeomFactory = new PreparedGeometryFactory
 
   def build(id: Long,
@@ -18,7 +17,7 @@ object MultiPolygons {
             _geoms: Seq[Geometry]): Option[Geometry] = {
     if (types.zip(_geoms).exists { case (t, g) => t == WayType && Option(g).isEmpty }) {
       // bail early if null values are present where they should exist (members w/ type=way)
-      logger.debug(s"Incomplete relation: $id @ $version ($timestamp)")
+      logDebug(s"Incomplete relation: $id @ $version ($timestamp)")
       None
     } else if (types.isEmpty) {
       // empty relation
@@ -26,7 +25,7 @@ object MultiPolygons {
     } else {
       val geomCount = _geoms.map(Option(_)).count(_.isDefined)
 
-      logger.debug(s"$id @ $version ($timestamp) ${geomCount.formatted("%,d")} geoms")
+      logDebug(s"$id @ $version ($timestamp) ${geomCount.formatted("%,d")} geoms")
       val geoms = _geoms.map {
         case geom: Polygon    => Some(geom.getExteriorRing)
         case geom: LineString => Some(geom)
@@ -34,7 +33,7 @@ object MultiPolygons {
       }
 
       val vertexCount = geoms.filter(_.isDefined).map(_.get).map(_.getNumPoints).sum
-      logger.warn(s"${vertexCount.formatted("%,d")} vertices (${geomCount
+      logInfo(s"${vertexCount.formatted("%,d")} vertices (${geomCount
         .formatted("%,d")} geoms) from ${types.size} members in $id @ $version ($timestamp)")
 
       val members: Seq[(String, LineString)] = roles
@@ -114,12 +113,11 @@ object MultiPolygons {
         }
       } catch {
         case e @ (_: AssemblyException | _: IllegalArgumentException | _: TopologyException) =>
-          logger.warn(
+          logWarning(
             s"Could not reconstruct relation $id @ $version ($timestamp): ${e.getMessage}")
           None
         case e: Throwable =>
-          logger.warn(s"Could not reconstruct relation $id @ $version ($timestamp): $e")
-          e.getStackTrace.foreach(logger.warn)
+          logWarning(s"Could not reconstruct relation $id @ $version ($timestamp):", e)
           None
       }
     }
