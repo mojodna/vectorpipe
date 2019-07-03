@@ -136,22 +136,6 @@ finer-grained control of the output of the process—say, if one does not need
 relations, for example—is available through the `vectorpipe.internal`
 package.
 
-There is a significant caveat here: there are two schemas that are
-found in the system when working with imported OSM dataframes.  The difference
-is in the type of a sub-field of the `members` list.  This can cause errors of
-the form
-```
-java.lang.ClassCastException: java.lang.String cannot be cast to java.lang.Byte
-```
-when using the `internal` package methods.
-
-These type problems can be fixed by calling
-`vectorpipe.functions.osm.ensureCompressedMembers` on the input OSM data frame
-before passing to any relation-generating functions, such as
-`reconstructRelationGeometries`.  Top-level functions in the `OSM` object
-handle this conversion for you.  Note that this only affects the data frames
-carrying the initially imported OSM data.
-
 ## Local Development ##
 
 If you are intending to contribute to VectorPipe, you may need to work with a

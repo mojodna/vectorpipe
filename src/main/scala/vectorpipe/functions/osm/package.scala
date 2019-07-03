@@ -200,23 +200,27 @@ package object osm {
   def isRoute(tags: Column): Column =
     array_contains(splitDelimitedValues(tags.getItem("type")), "route") as 'isRoute
 
-  private lazy val MemberSchema = ArrayType(
-    StructType(
+  private lazy val MemberSchema = StructType(
       StructField("type", ByteType, nullable = false) ::
         StructField("ref", LongType, nullable = false) ::
         StructField("role", StringType, nullable = false) ::
-        Nil), containsNull = false)
+        Nil)
 
   private val _compressMemberTypes = (members: Seq[Row]) =>
     members.map { row =>
-      val t = Member.typeFromString(row.getAs[String]("type"))
-      val ref = row.getAs[Long]("ref")
-      val role = row.getAs[String]("role")
+      if (row.schema == MemberSchema) {
+        // already compressed
+        row
+      } else {
+        val t = Member.typeFromString(row.getAs[String]("type"))
+        val ref = row.getAs[Long]("ref")
+        val role = row.getAs[String]("role")
 
-      Row(t, ref, role)
+        Row(t, ref, role)
+      }
     }
 
-  @transient lazy val compressMemberTypes: UserDefinedFunction = udf(_compressMemberTypes, MemberSchema)
+  @transient lazy val compressMemberTypes: UserDefinedFunction = udf(_compressMemberTypes, ArrayType(MemberSchema))
 
   /**
    * Checks if members have byte-encoded types
