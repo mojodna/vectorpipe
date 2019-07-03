@@ -8,9 +8,9 @@ class ProcessOSMTest extends FunSpec with TestEnvironment with Matchers {
 
   val elements = ss.read.orc(orcFile)
   val nodes = ProcessOSM.preprocessNodes(elements).cache
-  val nodeGeoms = ProcessOSM.constructPointGeometries(nodes).cache
+  val nodeGeoms = ProcessOSM.constructPointGeometries(nodes)
   val wayGeoms = ProcessOSM.reconstructWayGeometries(elements, nodes).cache
-  val relationGeoms = ProcessOSM.reconstructRelationGeometries(elements, wayGeoms).cache
+  val relationGeoms = ProcessOSM.reconstructRelationGeometries(elements, wayGeoms)
 
   it("parses isle of man nodes") {
     info(s"Nodes: ${nodeGeoms.count}")
