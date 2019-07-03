@@ -251,9 +251,16 @@ package object internal extends Logging {
       // multiple instances may exist with the same version)
       .repartition('id, 'updated)
 
+    val candidateNodes = nodes.select('id as 'ref, 'timestamp, 'validUntil, 'lat, 'lon)
+
     val waysAndNodes = explodedWays
-      .join(nodes.select('id as 'ref, 'timestamp, 'validUntil, 'lat, 'lon), Seq("ref"), "left_outer")
-      .where('timestamp <= 'updated and 'updated < coalesce('validUntil, current_timestamp))
+      .join(
+        candidateNodes,
+        explodedWays("ref") === candidateNodes("ref") and
+          'timestamp <= 'updated and
+          'updated < coalesce('validUntil, current_timestamp()),
+        "left_outer"
+      )
 
     val wayGeoms = waysAndNodes
       .select('changeset, 'id, 'version, 'updated, 'isArea, 'idx, 'lat, 'lon)
@@ -341,13 +348,14 @@ package object internal extends Logging {
       .drop('validUntil)
       // re-calculate validUntil windows
       .withColumn("validUntil", lead('updated, 1) over idByVersion)
-      // TODO when expanding beyond relations referring to ways, geoms should include 'type for the join to work
-      // properly
-      .withColumn("type", lit(WayType))
-      .select('type, 'changeset, 'id, 'updated)
-      .join(waysToRelations, Seq("id", "type"))
-      .where(waysToRelations("timestamp") <= geoms("updated") and
-        geoms("updated") < coalesce(waysToRelations("validUntil"), current_timestamp))
+      .select('_type, 'changeset, 'id, 'updated)
+      .join(
+        waysToRelations,
+        '_type === 'type and
+          geoms("id") === waysToRelations("id") and
+          waysToRelations("timestamp") <= geoms("updated") and
+          geoms("updated") < coalesce(waysToRelations("validUntil"), current_timestamp())
+      )
       .select('changeset, 'relationId as 'id, 'version, 'updated)
 
     @transient val idAndVersionByUpdated = Window.partitionBy('id, 'version).orderBy('updated)
@@ -423,20 +431,28 @@ package object internal extends Logging {
     val relations = preprocessRelations(_relations)
       .where(isMultiPolygon('tags))
 
-    val members = getRelationMembers(relations, geoms)
+    val allRelationMembers = getRelationMembers(relations, geoms)
       .where('role.isin(MultiPolygonRoles: _*))
-      // TODO when expanding beyond multipolygons, geoms should include 'type for the join to work properly
+
+    val members = allRelationMembers
       .join(
-      geoms.select(
-        lit(WayType) as 'type,
-        'id as "ref",
-        'updated as 'memberUpdated,
-        'validUntil as 'memberValidUntil,
-        'geom), Seq("type", "ref"), "left_outer")
-      .where(
-        ('memberUpdated.isNull and 'memberValidUntil.isNull and 'geom.isNull) or // allow left outer join artifacts
-          // through
-          ('memberUpdated <= 'updated and 'updated < coalesce('memberValidUntil, current_timestamp)))
+        geoms
+          .select(
+            '_type as 'geomType,
+            'id as 'geomId,
+            'updated as 'memberUpdated,
+            'validUntil as 'memberValidUntil,
+            'geom
+          )
+          .where('_type === WayType),
+        'geomType === 'type and
+          'ref === 'geomId and
+          'memberUpdated <= 'updated and
+          'updated < coalesce('memberValidUntil, current_timestamp()),
+        "left_outer"
+      )
+      .drop('geomType)
+      .drop('geomId)
       .drop('memberUpdated)
       .drop('memberValidUntil)
       .drop('ref)
@@ -494,19 +510,26 @@ package object internal extends Logging {
     val relations = preprocessRelations(_relations)
       .where(isRoute('tags))
 
-    val members = getRelationMembers(relations, geoms)
-      // TODO when expanding beyond way-based routes, geoms should include 'type for the join to work properly
+      val allRelationMembers = getRelationMembers(relations, geoms)
+
+    val members = allRelationMembers
       .join(
-      geoms.select(
-        lit(WayType) as 'type,
-        'id as "ref",
-        'updated as 'memberUpdated,
-        'validUntil as 'memberValidUntil,
-        'geom), Seq("type", "ref"), "left_outer")
-      .where(
-        ('memberUpdated.isNull and 'memberValidUntil.isNull and 'geom.isNull) or // allow left outer join artifacts
-          // through
-          ('memberUpdated <= 'updated and 'updated < coalesce('memberValidUntil, current_timestamp)))
+        geoms
+          .select(
+            '_type as 'geomType,
+            'id as 'geomId,
+            'updated as 'memberUpdated,
+            'validUntil as 'memberValidUntil,
+            'geom
+          ),
+        'geomType === 'type and
+          'ref === 'geomId and
+          'memberUpdated <= 'updated and
+          'updated < coalesce('memberValidUntil, current_timestamp()),
+        "left_outer"
+      )
+      .drop('geomType)
+      .drop('geomId)
       .drop('memberUpdated)
       .drop('memberValidUntil)
       .drop('ref)
