@@ -189,8 +189,11 @@ package object osm {
 
   def isArea(tags: Column): Column = isAreaUDF(tags) as 'isArea
 
-  def isMultiPolygon(tags: Column): Column =
-    tags.getItem("type") isin(MultiPolygonTypes: _*) as 'isMultiPolygon
+  def isMultiPolygon(tags: Column, types: Seq[String] = MultiPolygonTypes): Column =
+    isRelationOfType(tags, types) as 'isMultiPolygon
+
+  def isRelationOfType(tags: Column, types: Seq[String]): Column =
+    tags.getItem("type") isin(types: _*) as 'isRelationOfType
 
   def isNew(version: Column, minorVersion: Column): Column =
     version <=> 1 && minorVersion <=> 0 as 'isNew
