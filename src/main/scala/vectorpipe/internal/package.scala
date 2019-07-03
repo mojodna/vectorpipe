@@ -139,13 +139,14 @@ package object internal extends Logging {
       history
         .where('type === "relation")
         .repartition('id)
+        .withColumn("members", compressMemberTypes('members))
         .select(
           'id,
           when(!'visible and (lag('tags, 1) over idByUpdated).isNotNull,
             lag('tags, 1) over idByUpdated)
             .otherwise('tags) as 'tags,
-          compressMemberTypes(when(!'visible, lag('members, 1) over idByUpdated)
-            .otherwise('members)) as 'members,
+          when(!'visible, lag('members, 1) over idByUpdated)
+            .otherwise('members) as 'members,
           'changeset,
           'timestamp,
           (lead('timestamp, 1) over idByUpdated) as 'validUntil,
