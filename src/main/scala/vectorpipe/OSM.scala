@@ -10,7 +10,7 @@ import vectorpipe.internal._
 
 object OSM {
   /**
-    * Convert a raw OSM dataframe into a frame containing JTS geometries for each unique id/changeset.
+    * Convert a raw OSM DataFrame into a frame containing JTS geometries for each unique id/changeset.
     *
     * This currently produces Points for nodes containing "interesting" tags, LineStrings and Polygons for ways
     * (according to OSM rules for defining areas), MultiPolygons for multipolygon and boundary relations, and
@@ -28,14 +28,43 @@ object OSM {
       .withColumn("tags", removeUninterestingTags('tags))
 
     val nodes = preprocessNodes(elements)
+    val ways = preprocessWays(elements)
+    val relations = preprocessRelations(elements)
 
     val nodeGeoms = constructPointGeometries(nodes)
       .withColumn("minorVersion", lit(0))
       .withColumn("geom", st_pointToGeom('geom))
 
-    val wayGeoms = reconstructWayGeometries(elements, nodes)
+    // way geometries (including untagged ways which may be part of relations; standalone untagged ways will be filtered
+    // out later)
+    val wayGeoms = reconstructWayGeometries(ways, nodes)
+      // used more than once
+      .localCheckpoint()
 
-    val relationGeoms = reconstructRelationGeometries(elements, wayGeoms)
+    val members = relations
+      .select(explode('members) as 'member)
+      .select('member.getField("type") as '_type, 'member.getField("ref") as 'ref)
+      .distinct
+
+    // nodes that are members of relations (and need to be turned into Point geometries)
+    val nodesForRelations = members
+      .where('_type === NodeType)
+      .select('ref as 'id)
+      .distinct
+      .join(nodes, Seq("id"))
+
+    // generate Point geometries for all node members of relations (this is separate from nodeGeoms, as that only
+    // contains interestingly-tagged nodes and relations may refer to untagged nodes)
+    val relationNodeGeometries = constructPointGeometries(nodesForRelations)
+      .withColumn("minorVersion", lit(0))
+      .withColumn("geom", st_pointToGeom('geom))
+      .withColumn("geometryChanged", lit(true))
+
+    // when geometries are duplicated (tagged ways AND relations they're part of), they can be unioned according to
+    // geometries (and have their tags merged (preferring relation tags) -- or drop non-relations? or drop non-relations
+    // only when tags fully match?)
+
+    val relationGeoms = reconstructRelationGeometries(elements, wayGeoms.union(relationNodeGeometries))
 
     nodeGeoms
       .union(wayGeoms.where(size('tags) > 0).drop('geometryChanged))
