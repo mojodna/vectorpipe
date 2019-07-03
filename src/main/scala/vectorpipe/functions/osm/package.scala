@@ -190,15 +190,13 @@ package object osm {
   def isArea(tags: Column): Column = isAreaUDF(tags) as 'isArea
 
   def isMultiPolygon(tags: Column): Column =
-    array_intersects(
-      splitDelimitedValues(tags.getItem("type")),
-      lit(MultiPolygonTypes.toArray)) as 'isMultiPolygon
+    tags.getItem("type") isin(MultiPolygonTypes: _*) as 'isMultiPolygon
 
   def isNew(version: Column, minorVersion: Column): Column =
     version <=> 1 && minorVersion <=> 0 as 'isNew
 
   def isRoute(tags: Column): Column =
-    array_contains(splitDelimitedValues(tags.getItem("type")), "route") as 'isRoute
+    tags.getItem("type") === "route" as 'isRoute
 
   private lazy val MemberSchema = StructType(
       StructField("type", ByteType, nullable = false) ::
