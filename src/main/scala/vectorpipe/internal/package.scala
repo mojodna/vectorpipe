@@ -370,7 +370,7 @@ package object internal extends Logging {
       // multiple entries with different timestamps; this reduces them down to a single update per changeset.
       .groupBy('changeset, 'id)
       .agg(max('version).cast(IntegerType) as 'version, max('updated) as 'updated)
-      .join(relations.select('id, 'version, 'members), Seq("id", "version"))
+      .join(relations.select('id, 'version, 'tags.getField("type") as 'relationType, 'members), Seq("id", "version"))
       // assign `minorVersion` and rewrite `validUntil` to match
       // this is done early (at the expense of passing through the shuffle w/ exploded 'members) to avoid extremely
       // large partitions (see: Germany w/ 7k+ geometry versions) after geometries have been constructed
@@ -378,7 +378,6 @@ package object internal extends Logging {
       .withColumn("minorVersion", (row_number over idAndVersionByUpdated) - 1)
 
     allRelationVersions
-      .select('changeset, 'id, 'version, 'minorVersion, 'updated, 'validUntil, explode_outer('members) as "member")
       .select(
         'changeset,
         'id,
@@ -386,10 +385,13 @@ package object internal extends Logging {
         'minorVersion,
         'updated,
         'validUntil,
-        'member.getField("type") as 'type,
-        'member.getField("ref") as 'ref,
-        'member.getField("role") as 'role
+        'relationType,
+        posexplode_outer('members) as Seq("idx", "member")
       )
+      .withColumn("type", 'member.getField("type"))
+      .withColumn("ref", 'member.getField("ref"))
+      .withColumn("role", 'member.getField("role"))
+      .drop('members)
       .distinct
   }
 
@@ -431,6 +433,8 @@ package object internal extends Logging {
 
     val relations = preprocessRelations(_relations)
       .where(isMultiPolygon('tags))
+      .drop("idx")
+      .drop("relationType")
 
     val allRelationMembers = getRelationMembers(relations, geoms)
       .where('role.isin(MultiPolygonRoles: _*))
