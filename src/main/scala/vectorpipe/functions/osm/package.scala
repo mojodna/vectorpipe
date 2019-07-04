@@ -3,12 +3,11 @@ package vectorpipe.functions
 import org.apache.spark.sql.expressions.UserDefinedFunction
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
-import org.apache.spark.sql.{Column, DataFrame, Row}
+import org.apache.spark.sql.{Column, Row}
 import vectorpipe.model.Member
 import vectorpipe.util._
 
 import scala.util.matching.Regex
-import scala.util.{Failure, Success, Try}
 
 package object osm {
   // Using tag listings from [id-area-keys](https://github.com/osmlab/id-area-keys) @ v2.13.0.
@@ -140,8 +139,6 @@ package object osm {
     )
   )
 
-  private val MultiPolygonTypes = Seq("multipolygon", "boundary")
-
   private val TruthyValues = Seq("yes", "true", "1")
 
   private val FalsyValues = Seq("no", "false", "0")
@@ -189,7 +186,7 @@ package object osm {
 
   def isArea(tags: Column): Column = isAreaUDF(tags) as 'isArea
 
-  def isMultiPolygon(tags: Column, types: Seq[String] = MultiPolygonTypes): Column =
+  def isMultiPolygon(tags: Column, types: Seq[String] = Seq("multipolygon")): Column =
     isRelationOfType(tags, types) as 'isMultiPolygon
 
   def isRelationOfType(tags: Column, types: Seq[String]): Column =
@@ -197,9 +194,6 @@ package object osm {
 
   def isNew(version: Column, minorVersion: Column): Column =
     version <=> 1 && minorVersion <=> 0 as 'isNew
-
-  def isRoute(tags: Column): Column =
-    tags.getItem("type") === "route" as 'isRoute
 
   private lazy val MemberSchema = StructType(
       StructField("type", ByteType, nullable = false) ::

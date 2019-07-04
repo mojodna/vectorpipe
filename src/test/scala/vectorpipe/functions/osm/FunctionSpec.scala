@@ -51,27 +51,10 @@ class FunctionSpec extends FunSpec with TestEnvironment with Matchers {
       Seq(
         Map("type" -> "multipolygon") -> true,
         Map("type" -> "boundary") -> true,
-        Map("type" -> "route") -> false,
-        Map("type" -> "multipolygon;boundary") -> true,
-        Map("type" -> "multipolygon ; boundary") -> true
+        Map("type" -> "route") -> false
       )
         .toDF("tags", "value")
-        .where(isMultiPolygon('tags) =!= 'value)
-        .count should equal(0)
-    }
-  }
-
-  describe("isRoute") {
-    it("marks routes appropriately") {
-      Seq(
-        Map("type" -> "multipolygon") -> false,
-        Map("type" -> "boundary") -> false,
-        Map("type" -> "route") -> true,
-        Map("type" -> "route;boundary") -> true,
-        Map("type" -> "route ; boundary") -> true
-      )
-        .toDF("tags", "value")
-        .where(isRoute('tags) =!= 'value)
+        .where(isMultiPolygon('tags, Seq("multipolygon", "boundary")) =!= 'value)
         .count should equal(0)
     }
   }

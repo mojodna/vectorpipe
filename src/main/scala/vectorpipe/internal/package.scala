@@ -406,11 +406,45 @@ package object internal extends Logging {
     * @param geoms      DataFrame containing geometries to use in reconstruction.
     * @return Relation geometries.
     */
-  def reconstructRelationGeometries(_relations: DataFrame, geoms: DataFrame): DataFrame = {
+  def reconstructRelationGeometries(
+    _relations: DataFrame,
+    geoms: DataFrame,
+    relationTypes: Seq[String] = Seq("boundary", "route", "building", "restriction", "site", "public_transport"),
+    multiPolygonTypes: Seq[String] = Seq("multipolygon")
+  ): DataFrame = {
+    import _relations.sparkSession.implicits._
+
     val relations = preprocessRelations(_relations)
 
-    reconstructMultiPolygonRelationGeometries(relations, geoms)
-      .union(reconstructRouteRelationGeometries(relations, geoms))
+    val members = relations
+      .where(isRelationOfType('tags, relationTypes))
+      .select(explode('members) as 'member)
+      // ignore subareas
+      .where('member.getField("type") === lit(RelationType) and 'member.getField("role") =!= "subarea")
+      .select('member.getField("ref") as 'id)
+      .distinct
+      .join(relations, Seq("id"))
+      // TODO process things other than multipolygons? (e.g. routes that are part of routes)
+      .where(isMultiPolygon('tags))
+
+    val multiPolygonMemberGeoms = reconstructMultiPolygonRelationGeometries(
+      members,
+      geoms
+    )
+
+    // construct multipolygons
+    reconstructMultiPolygonRelationGeometries(relations.where(isMultiPolygon('tags, multiPolygonTypes)), geoms)
+      .union(
+        // construct generic relations using MP member geoms + geoms
+        reconstructGenericRelationGeometries(
+          relations.where(isRelationOfType('tags, relationTypes)),
+          // support multipolygon members of other relation types
+          geoms.union(
+            multiPolygonMemberGeoms
+              .withColumn("geometryChanged", lit(true))
+          )
+        )
+      )
   }
 
   /**
@@ -505,22 +539,21 @@ package object internal extends Logging {
   } + s"$id@$version.$minorVersion"
 
   /**
-    * Reconstruct route relations.
+    * Reconstruct non-multipolygon relations.
     *
-    * Route relations are made of up linear ways and nodes. Existing way geometries will be preserved, accumulating tags
-    * from their corresponding relation.
+    * Existing geometries will be preserved, accumulating tags from their corresponding relation.
     *
     * @param _relations DataFrame containing relations to reconstruct.
     * @param geoms      DataFrame containing geometries to use in reconstruction.
-    * @return LineString route geometries with relation tags.
+    * @return LineString or Polygon geometries.
     */
-  def reconstructRouteRelationGeometries(_relations: DataFrame, geoms: DataFrame): DataFrame = {
+  def reconstructGenericRelationGeometries(_relations: DataFrame, geoms: DataFrame): DataFrame = {
     implicit val ss: SparkSession = _relations.sparkSession
     import ss.implicits._
     ss.withJTS
 
     val relations = preprocessRelations(_relations)
-      .where(isRoute('tags))
+      .where(not(isMultiPolygon('tags)))
 
     val members = getRelationMembers(relations, geoms)
       .join(
@@ -565,7 +598,12 @@ package object internal extends Logging {
           val refVersions = members.map(_.getAs[Int]("refVersion"))
           val refMinorVersions = members.map(_.getAs[Int]("refMinorVersion"))
           val roles = members.map(_.getAs[String]("role"))
-          val geoms = members.map(_.getAs[jts.Geometry]("geom"))
+          val geoms = members.map(_.getAs[jts.Geometry]("geom")).map {
+            // if the relation is a boundary, convert polygons to lines
+            case g: jts.Polygon if relationType == "boundary" => g.getBoundary
+            case g: jts.MultiPolygon if relationType == "boundary" => g.getBoundary
+            case g => g
+          }
 
           // combine existing geometries with relation metadata
           (indices.zip(types.zip((refs, refVersions, refMinorVersions).zipped.toVector)), roles, geoms).zipped.map {
