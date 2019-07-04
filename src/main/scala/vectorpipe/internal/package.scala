@@ -12,7 +12,7 @@ import org.locationtech.geomesa.spark.jts._
 import org.locationtech.jts.{geom => jts}
 import vectorpipe.functions.asDouble
 import vectorpipe.functions.osm._
-import vectorpipe.relations.{MultiPolygons, Routes}
+import vectorpipe.relations.MultiPolygons
 
 package object internal extends Logging {
   val NodeType: Byte = 1
@@ -496,16 +496,23 @@ package object internal extends Logging {
         'minorVersion)
   }
 
+  private def shortVersion(`type`: Byte, id: Long, version: Int, minorVersion: Int): String = {
+    `type` match {
+      case NodeType => "n"
+      case WayType => "w"
+      case RelationType => "r"
+    }
+  } + s"$id@$version.$minorVersion"
+
   /**
     * Reconstruct route relations.
     *
-    * Route relations are made of up linear ways. Where possible, contiguous ways with matching roles will be joined to
-    * form longer segments. As multiple directions may be included in the relation (and segments may be discontiguous),
-    * this produces MultiLineStrings in addition to LineStrings.
+    * Route relations are made of up linear ways and nodes. Existing way geometries will be preserved, accumulating tags
+    * from their corresponding relation.
     *
     * @param _relations DataFrame containing relations to reconstruct.
     * @param geoms      DataFrame containing geometries to use in reconstruction.
-    * @return LineString or MultiLineString route geometries.
+    * @return LineString route geometries with relation tags.
     */
   def reconstructRouteRelationGeometries(_relations: DataFrame, geoms: DataFrame): DataFrame = {
     implicit val ss: SparkSession = _relations.sparkSession
@@ -515,14 +522,14 @@ package object internal extends Logging {
     val relations = preprocessRelations(_relations)
       .where(isRoute('tags))
 
-      val allRelationMembers = getRelationMembers(relations, geoms)
-
-    val members = allRelationMembers
+    val members = getRelationMembers(relations, geoms)
       .join(
         geoms
           .select(
             '_type as 'geomType,
             'id as 'geomId,
+            'version as 'refVersion,
+            'minorVersion as 'refMinorVersion,
             'updated as 'memberUpdated,
             'validUntil as 'memberValidUntil,
             'geom
@@ -537,40 +544,81 @@ package object internal extends Logging {
       .drop('geomId)
       .drop('memberUpdated)
       .drop('memberValidUntil)
-      .drop('ref)
 
-    // leverage partitioning (avoids repeated (de-)serialization of merged coordinate arrays)
     val relationGeoms = members
-      .groupByKey { row =>
-        (row.getAs[Long]("changeset"), row.getAs[Long]("id"), row.getAs[Integer]("version"), row.getAs[Integer]
-          ("minorVersion"), row.getAs[Timestamp]("updated"), row.getAs[Timestamp]("validUntil"))
+      .groupByKey { row => (
+          row.getAs[Long]("changeset"),
+          row.getAs[Long]("id"),
+          row.getAs[Integer]("version"),
+          row.getAs[Integer]("minorVersion"),
+          row.getAs[Timestamp]("updated"),
+          row.getAs[Timestamp]("validUntil"),
+          row.getAs[String]("relationType")
+        )
       }
       .flatMapGroups {
-        case ((changeset, id, version, minorVersion, updated, validUntil), rows) =>
+        case ((changeset, id, version, minorVersion, updated, validUntil, relationType), rows) =>
           val members = rows.toVector
+          val indices = members.map(_.getAs[Int]("idx"))
           val types = members.map(_.getAs[Byte]("type"))
+          val refs = members.map(_.getAs[Long]("ref"))
+          val refVersions = members.map(_.getAs[Int]("refVersion"))
+          val refMinorVersions = members.map(_.getAs[Int]("refMinorVersion"))
           val roles = members.map(_.getAs[String]("role"))
           val geoms = members.map(_.getAs[jts.Geometry]("geom"))
 
-          Routes.build(id, version, updated, types, roles, geoms) match {
-            case Some(components) =>
-              components.map {
-                case ("", geom) =>
-                  // no role
-                  (changeset, id, Map.empty[String, String], version, minorVersion, updated, validUntil, geom)
-                case (role, geom) =>
-                  (changeset, id, Map("role" -> role), version, minorVersion, updated, validUntil, geom)
-              }
-            case None =>
-              // no geometry
-              Seq((changeset, id, Map.empty[String, String], version, minorVersion, updated, validUntil, null))
+          // combine existing geometries with relation metadata
+          (indices.zip(types.zip((refs, refVersions, refMinorVersions).zipped.toVector)), roles, geoms).zipped.map {
+            case ((idx, (t, (ref, refVersion, refMinorVersion))), "", geom) =>
+              (
+                idx,
+                changeset,
+                id,
+                Map("__ref" -> shortVersion(t, ref, refVersion, refMinorVersion)),
+                version,
+                minorVersion,
+                updated,
+                validUntil,
+                geom,
+                refVersion,
+                refMinorVersion
+              )
+            case ((idx, (t, (ref, refVersion, refMinorVersion))), role, geom) =>
+              (
+                idx,
+                changeset,
+                id,
+                Map("__ref" -> shortVersion(t, ref, refVersion, refMinorVersion), "__role" -> role),
+                version,
+                minorVersion,
+                updated,
+                validUntil,
+                geom,
+                refVersion,
+                refMinorVersion
+              )
           }
-      }
-      .toDF("changeset", "id", "tags", "version", "minorVersion", "updated", "validUntil", "geom")
+      }.toDF("idx", "changeset", "id", "tags", "version", "minorVersion", "updated", "validUntil", "geom", "refVersion", "refMinorVersion")
+
+    @transient val idVersionAndIndexByMinorVersion = Window.partitionBy('id, 'version, 'idx).orderBy('version, 'minorVersion)
+    @transient val idAndIndexByVersion = Window.partitionBy('id, 'idx).orderBy('minorVersion)
 
     // Join metadata to avoid passing it through exploded shuffles
     relationGeoms
-      .join(relations.select('id, 'version, 'tags as 'originalTags, 'visible), Seq("id", "version"))
+      // drop members that didn't change between minor versions of the relation
+      .withColumn("memberChanged", when(
+        (lag('refVersion, 1) over idVersionAndIndexByMinorVersion) === 'refVersion and
+          (lag('refMinorVersion, 1) over idVersionAndIndexByMinorVersion) === 'refMinorVersion, false
+        )
+        .otherwise(true))
+      .where('memberChanged)
+      // drop members with null geometries
+      .where('geom.isNotNull)
+      .join(
+        relations
+          .select('id, 'version, 'tags as 'originalTags, 'visible, 'validUntil as 'relationValidUntil),
+        Seq("id", "version")
+      )
       .select(
         lit(RelationType) as '_type,
         'id,
@@ -578,9 +626,12 @@ package object internal extends Logging {
         mergeTags('originalTags, 'tags) as 'tags,
         'changeset,
         'updated,
-        'validUntil,
+        // expand validity range to cover dropped minor versions
+        least('relationValidUntil, lead('updated, 1) over idAndIndexByVersion) as 'validUntil,
         'visible,
         'version,
+        // NOTE: there will be "missing" minor versions when member elements didn't change; they're not renumbered, as
+        // only some elements may have been dropped
         'minorVersion)
   }
 
