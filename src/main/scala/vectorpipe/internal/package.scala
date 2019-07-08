@@ -295,7 +295,8 @@ package object internal extends Logging {
                   Some(GeomFactory.factory.createPolygon(line.getCoordinateSequence))
                 else
                   Some(line)
-            }
+          }
+
           val geometry = geom match {
             case Some(g) if g.isValid => g
             case _ => null
@@ -606,36 +607,39 @@ package object internal extends Logging {
           }
 
           // combine existing geometries with relation metadata
-          (indices.zip(types.zip((refs, refVersions, refMinorVersions).zipped.toVector)), roles, geoms).zipped.map {
-            case ((idx, (t, (ref, refVersion, refMinorVersion))), "", geom) =>
-              (
-                idx,
-                changeset,
-                id,
-                Map("__ref" -> shortVersion(t, ref, refVersion, refMinorVersion)),
-                version,
-                minorVersion,
-                updated,
-                validUntil,
-                geom,
-                refVersion,
-                refMinorVersion
-              )
-            case ((idx, (t, (ref, refVersion, refMinorVersion))), role, geom) =>
-              (
-                idx,
-                changeset,
-                id,
-                Map("__ref" -> shortVersion(t, ref, refVersion, refMinorVersion), "__role" -> role),
-                version,
-                minorVersion,
-                updated,
-                validUntil,
-                geom,
-                refVersion,
-                refMinorVersion
-              )
-          }
+          (indices.zip(types.zip((refs, refVersions, refMinorVersions).zipped.toVector)), roles, geoms)
+            .zipped
+            .filterNot(x => Option(x._3).isEmpty)
+            .map {
+              case ((idx, (t, (ref, refVersion, refMinorVersion))), "", geom) =>
+                (
+                  idx,
+                  changeset,
+                  id,
+                  Map("__ref" -> shortVersion(t, ref, refVersion, refMinorVersion)),
+                  version,
+                  minorVersion,
+                  updated,
+                  validUntil,
+                  geom,
+                  refVersion,
+                  refMinorVersion
+                )
+              case ((idx, (t, (ref, refVersion, refMinorVersion))), role, geom) =>
+                (
+                  idx,
+                  changeset,
+                  id,
+                  Map("__ref" -> shortVersion(t, ref, refVersion, refMinorVersion), "__role" -> role),
+                  version,
+                  minorVersion,
+                  updated,
+                  validUntil,
+                  geom,
+                  refVersion,
+                  refMinorVersion
+                )
+            }
       }.toDF("idx", "changeset", "id", "tags", "version", "minorVersion", "updated", "validUntil", "geom", "refVersion", "refMinorVersion")
 
     @transient val idVersionAndIndexByMinorVersion = Window.partitionBy('id, 'version, 'idx).orderBy('version, 'minorVersion)
