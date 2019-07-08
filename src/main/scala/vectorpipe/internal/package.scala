@@ -536,6 +536,9 @@ package object internal extends Logging {
       case NodeType => "n"
       case WayType => "w"
       case RelationType => "r"
+      case _ =>
+        logWarning(s"Unexpected type: ${`type`}: $id@$version.$minorVersion")
+        "?"
     }
   } + s"$id@$version.$minorVersion"
 
