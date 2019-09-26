@@ -38,8 +38,6 @@ object OSM {
     // way geometries (including untagged ways which may be part of relations; standalone untagged ways will be filtered
     // out later)
     val wayGeoms = reconstructWayGeometries(ways, nodes)
-      // used more than once
-      .localCheckpoint()
 
     val members = relations
       .select(explode('members) as 'member)
