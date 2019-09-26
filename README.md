@@ -32,7 +32,7 @@ package.
 The fastest way to get started with VectorPipe is to invoke `spark-shell` and
 load the package jars from the Bintray repository:
 ```bash
-spark-shell --packages com.azavea:vectorpipe_2.11:1.0.0 --repositories http://dl.bintray.com/azavea/maven
+spark-shell --packages com.azavea:vectorpipe_2.11:1.1.0 --repositories http://dl.bintray.com/azavea/maven
 ```
 
 This will download the required components and set up a REPL with VectorPipe
@@ -128,6 +128,26 @@ Again, the JTS user defined types allow for easier manipulation of and
 calculation from geometric types.  See
 [here](https://www.geomesa.org/documentation/user/spark/sparksql_functions.html)
 for a list of functions that operate on geometries.
+
+#### A Note on Geocoding ####
+
+VectorPipe provides the means to tag geometries with the country codes of the
+countries they interact with, but it does not provide the boundaries used to
+do the coding.  That gives the user the option to select geometries
+appropriate to the task at hand—low resolution geometries for less fussy
+applications, high resolution when precision is important.
+
+In order for an application to make use of `vectorpipe.util.Geocode`, it must
+supply a `countries.geojson` in in the root of its project's `resources`
+directory.  That GeoJSON file must contain a `FeatureCollection`, with each
+entry having an `ADM0_A3` entry in its `properties` list.
+
+One may employ the [Natural Earth Admin
+0](https://www.naturalearthdata.com/downloads/10m-cultural-vectors/10m-admin-0-boundary-lines/)
+resource for low-precision tasks, or use something like the [Global LSIB
+Polygons](http://geonode.state.gov/layers/geonode%3AGlobal_LSIB_Polygons_Detailed)
+for more precise tasks (though the latter resource does not tag its elements
+with the `ADM0_A3` three-letter codes, so some preprocessing would be required).
 
 ## The `internal` package ##
 
