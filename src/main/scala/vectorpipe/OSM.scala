@@ -45,6 +45,7 @@ object OSM {
       .select(explode('members) as 'member)
       .select('member.getField("type") as '_type, 'member.getField("ref") as 'ref)
       .distinct
+      .localCheckpoint()
 
     // nodes that are members of relations (and need to be turned into Point geometries)
     val nodesForRelations = members
@@ -55,16 +56,35 @@ object OSM {
 
     // generate Point geometries for all node members of relations (this is separate from nodeGeoms, as that only
     // contains interestingly-tagged nodes and relations may refer to untagged nodes)
-    val relationNodeGeometries = constructPointGeometries(nodesForRelations)
+    val relationNodeGeometries = constructPointGeometries(nodesForRelations, all = true)
       .withColumn("minorVersion", lit(0))
       .withColumn("geom", st_pointToGeom('geom))
       .withColumn("geometryChanged", lit(true))
+
+    val relationWayGeometries = members
+      .where('_type === WayType)
+      .select('ref as 'id)
+      .distinct
+      .join(wayGeoms, Seq("id"))
+      .select(
+        '_type,
+        'id,
+        'geom,
+        'tags,
+        'changeset,
+        'updated,
+        'validUntil,
+        'visible,
+        'version,
+        'minorVersion,
+        'geometryChanged
+      )
 
     // when geometries are duplicated (tagged ways AND relations they're part of), they can be unioned according to
     // geometries (and have their tags merged (preferring relation tags) -- or drop non-relations? or drop non-relations
     // only when tags fully match?)
 
-    val relationGeoms = reconstructRelationGeometries(elements, wayGeoms.union(relationNodeGeometries))
+    val relationGeoms = reconstructRelationGeometries(elements, relationNodeGeometries.union(relationWayGeometries))
 
     nodeGeoms
       .union(wayGeoms.where(size('tags) > 0).drop('geometryChanged))

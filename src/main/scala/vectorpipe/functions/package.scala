@@ -4,6 +4,7 @@ import org.apache.spark.sql.Column
 import org.apache.spark.sql.expressions.UserDefinedFunction
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.{DoubleType, FloatType}
+import org.locationtech.geomesa.spark.jts.{st_envelope, st_exteriorRing, st_geometryType, st_isEmpty, st_pointN, st_x, st_y}
 import vectorpipe.util._
 
 package object functions {
@@ -52,4 +53,18 @@ package object functions {
   private val _mergeCounts = (a: Map[String, Int], b: Map[String, Int]) =>
     mergeMaps(Option(a).getOrElse(Map.empty[String, Int]),
               Option(b).getOrElse(Map.empty[String, Int]))(_ + _)
+  def box2d(geom: Column): Column =
+    when(
+      geom.isNotNull and not(st_isEmpty(geom)),
+      when(st_geometryType(geom) === "Point",
+        struct(st_x(geom) as 'minX,
+          st_y(geom) as 'minY,
+          st_x(geom) as 'maxX,
+          st_y(geom) as 'maxY)).otherwise(struct(
+        st_x(st_pointN(st_exteriorRing(st_envelope(geom)), lit(1))) as 'minX,
+        st_y(st_pointN(st_exteriorRing(st_envelope(geom)), lit(1))) as 'minY,
+        st_x(st_pointN(st_exteriorRing(st_envelope(geom)), lit(3))) as 'maxX,
+        st_y(st_pointN(st_exteriorRing(st_envelope(geom)), lit(3))) as 'maxY
+      ))
+    )
 }
