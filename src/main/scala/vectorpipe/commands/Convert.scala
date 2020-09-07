@@ -9,6 +9,7 @@ import org.apache.log4j.{Level, Logger}
 import org.apache.spark._
 import org.apache.spark.serializer.KryoSerializer
 import org.apache.spark.sql._
+import org.apache.spark.sql.functions._
 import org.locationtech.geomesa.spark.jts._
 import vectorpipe.OSM._
 import vectorpipe.functions.box2d
@@ -64,9 +65,9 @@ object Convert
             // create a bbox struct to optimize spatial filtering
             .withColumn("bbox", box2d('geom))
             // store the geometry as WKB
-            .withColumn("geom", st_asBinary('geom))
+            // .withColumn("geom", st_asBinary('geom))
             // store the geometry as WKT
-//            .withColumn("geom", when(not(st_isEmpty('geom)), st_asText('geom)))
+            .withColumn("geom", when(not(st_isEmpty('geom)), st_asText('geom)))
             .repartition(numPartitions)
             .write
             .mode(SaveMode.Overwrite)
