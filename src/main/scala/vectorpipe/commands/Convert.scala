@@ -4,7 +4,7 @@ import java.time.{Duration, Instant}
 
 import cats.implicits._
 import com.monovore.decline._
-import geotrellis.spark.io.kryo.KryoRegistrator
+import geotrellis.spark.store.kryo.KryoRegistrator
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark._
 import org.apache.spark.serializer.KryoSerializer

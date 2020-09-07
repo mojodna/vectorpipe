@@ -59,7 +59,7 @@ object AugmentedDiffSource extends Logging {
       try {
         IOUtils
           .toString(gzis, StandardCharsets.UTF_8)
-          .lines
+          .linesIterator
           .map { line =>
             // Spark doesn't like RS-delimited JSON; perhaps Spray doesn't either
             val features = line

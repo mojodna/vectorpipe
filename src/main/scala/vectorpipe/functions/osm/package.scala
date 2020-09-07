@@ -3,11 +3,12 @@ package vectorpipe.functions
 import org.apache.spark.sql.expressions.UserDefinedFunction
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
-import org.apache.spark.sql.{Column, Row}
+import org.apache.spark.sql.{Column, DataFrame, Row}
 import vectorpipe.model.Member
 import vectorpipe.util._
 
 import scala.util.matching.Regex
+import scala.util.{Failure, Success, Try}
 
 package object osm {
   // Using tag listings from [id-area-keys](https://github.com/osmlab/id-area-keys) @ v2.13.0.
@@ -216,6 +217,29 @@ package object osm {
     }
 
   @transient lazy val compressMemberTypes: UserDefinedFunction = udf(_compressMemberTypes, ArrayType(MemberSchema))
+
+  /**
+   * Checks if members have byte-encoded types
+   */
+  def hasCompressedMemberTypes(input: DataFrame): Boolean = {
+    Try(input.schema("members")
+             .dataType
+             .asInstanceOf[ArrayType]
+             .elementType
+             .asInstanceOf[StructType]
+             .apply("type")) match {
+      case Failure(_) => false
+      case Success(field) => field.dataType == ByteType
+    }
+  }
+
+  def ensureCompressedMembers(input: DataFrame): DataFrame = {
+    if (hasCompressedMemberTypes(input))
+      input
+    else {
+      input.withColumn("members", compressMemberTypes(col("members")))
+    }
+  }
 
   case class StrMember(`type`: String, ref: Long, role: String)
 
