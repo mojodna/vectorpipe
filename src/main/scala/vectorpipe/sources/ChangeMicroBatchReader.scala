@@ -3,15 +3,15 @@ package vectorpipe.sources
 import java.net.URI
 import java.util
 
-import org.apache.spark.sql.Row
+import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.sources.v2.DataSourceOptions
-import org.apache.spark.sql.sources.v2.reader.{DataReader, DataReaderFactory}
+import org.apache.spark.sql.sources.v2.reader.{InputPartition, InputPartitionReader}
 import vectorpipe.model.Change
 
 import scala.collection.JavaConverters._
 
-case class ChangeStreamBatchTask(baseURI: URI, sequences: Seq[Int]) extends DataReaderFactory[Row] {
-  override def createDataReader(): DataReader[Row] =
+case class ChangeStreamBatchTask(baseURI: URI, sequences: Seq[Int]) extends InputPartition[InternalRow] {
+  override def createPartitionReader(): InputPartitionReader[InternalRow] =
     new ChangeStreamBatchReader(baseURI, sequences)
 }
 
@@ -24,7 +24,7 @@ class ChangeStreamBatchReader(baseURI: URI, sequences: Seq[Int])
 
 case class ChangeMicroBatchReader(options: DataSourceOptions, checkpointLocation: String)
     extends ReplicationStreamMicroBatchReader[Change](options, checkpointLocation) {
-  private val baseURI = new URI(
+  private lazy val baseURI = new URI(
     options
       .get(Source.BaseURI)
       .orElse("https://planet.osm.org/replication/minute/")
@@ -33,10 +33,10 @@ case class ChangeMicroBatchReader(options: DataSourceOptions, checkpointLocation
   override def getCurrentSequence: Option[Int] =
     ChangeSource.getCurrentSequence(baseURI)
 
-  override def createDataReaderFactories(): util.List[DataReaderFactory[Row]] =
+  override def planInputPartitions(): util.List[InputPartition[InternalRow]] =
     sequenceRange
       .map(
-        seq => ChangeStreamBatchTask(baseURI, Seq(seq)).asInstanceOf[DataReaderFactory[Row]]
+        seq => ChangeStreamBatchTask(baseURI, Seq(seq)).asInstanceOf[InputPartition[InternalRow]]
       )
       .asJava
 }

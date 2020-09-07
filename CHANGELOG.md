@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD024 -->
 # Changelog
 
 All notable changes to this project will be documented in this file.
@@ -9,9 +10,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Receive GPG key while publishing artifacts [#138](https://github.com/geotrellis/vectorpipe/pull/138)
+
 ### Changed
 
+- `VectorPipe.Options` to support for any square layout level (not just from ZoomedLayoutScheme)
+
 ### Fixed
+
+## [2.1.3] - 2019-12-18
+
+### Fixed
+
+- Catch 403 S3Exceptions when checking minutely diffs in AugmentedDiffSource
+
+## [2.1.2] - 2019-12-17
+
+### Fixed
+
+- Catch proper AWS SDK v2 NoSuchKeyException when checking minutely diffs in AugmentedDiffSource
+
+## [2.1.1] - 2019-12-16
+
+### Fixed
+
+- AugmentedDiffSource failed to properly decode from JSON sources
+- MicroBatchReader null pointer exception when reading baseURI from DataSourceOptions
+
+## [2.1.0] - 2019-12-12
+
+### Added
+
+- `vectorpipe.examples`: VectorPipe examples moved from https://github.com/azavea/osmesa
+- `VectorPipe.defaultSparkSessionWithJTS` method to construct a VectorPipe tailored `SparkSession`. Users with more complicated use cases will still want to manually construct their own session.
+
+## [2.0.0] - 2019-11-29
+
+This is the first release to depend on GeoTrellis 3.0.
+
+### Changed
+
+- Streaming sources now fallback to the current remote sequence if no database
+  checkpoint or option can be found
+- Depend on Spark 2.4.4
+- Depend on GeoTrellis 3.1.0
 
 ## [1.1.0] - 2019-09-26
 
@@ -20,7 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `useCaching` option to VectorPipe.Options allows for persisting to disk.
   Helps avoid repeated computations.
 - Functions for converting sequence numbers to timestamps and back for both
-  changeset replications and augmented diff replications.  See `ChangesetSource`
+  changeset replications and augmented diff replications. See `ChangesetSource`
   and `AugmentedDiffSource` in `vectorpipe.sources`.
 
 ### Changed
@@ -36,11 +78,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - RELEASING.md - Instructions for releasing new versions of this project
 - Support for semicolon-delimited tag values in UDFs, e.g. `shop=bakery;dairy`
 - Support for `nds` in augmented diff GeoJSON (matching
-    [`osm-replication-streams@^0.7.0`](https://github.com/mojodna/osm-replication-streams/tree/v0.7.0)
-    output)
+  [`osm-replication-streams@^0.7.0`](https://github.com/mojodna/osm-replication-streams/tree/v0.7.0)
+  output)
 - "Uninteresting" tags are dropped when processing OSM inputs; this will result
-    in fewer point features being generated (as those nodes previously had tags
-    applied).
+  in fewer point features being generated (as those nodes previously had tags
+  applied).
 
 ### Changed
 

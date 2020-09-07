@@ -10,7 +10,7 @@ class ProcessOSMTest extends FunSpec with TestEnvironment with Matchers {
   val nodes = ProcessOSM.preprocessNodes(elements).cache
   val nodeGeoms = ProcessOSM.constructPointGeometries(nodes)
   val wayGeoms = ProcessOSM.reconstructWayGeometries(elements, nodes).cache
-  val relationGeoms = ProcessOSM.reconstructRelationGeometries(elements, wayGeoms)
+  val relationGeoms = ProcessOSM.reconstructRelationGeometries(elements, wayGeoms).cache
 
   it("parses isle of man nodes") {
     info(s"Nodes: ${nodeGeoms.count}")
